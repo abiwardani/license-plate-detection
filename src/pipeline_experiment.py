@@ -4,11 +4,13 @@ from tqdm.notebook import tqdm
 import os
 from glob import glob
 import numpy as np
+from sklearn.metrics import f1_score
 
 #--- general utils ---#
 
 def load_images(directory):
     images = []
+    names = []
 
     w = 500
     h = 300
@@ -20,9 +22,9 @@ def load_images(directory):
             # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img = cv2.resize(img,(w, h))
             # img = cv2.medianBlur(img,5)
-            images.append(img)
+            name = filepath[:filepath.index(".")]
+            images.append([name, img])
     
-    images = np.array(images) #.reshape(len(images),w,h,3)
     return images
 
 def run_length_encoding(arr, n):
@@ -144,7 +146,7 @@ def area_thresholding(img):
 
     area = bwareaopen(area2, 75)
 
-    cv2.imshow('Final', area)
+    # cv2.imshow('Final', area)
 
     return area
 
@@ -161,45 +163,77 @@ def detect_plate_area(img):
 
     segments = []
     starts = []
+    segmented_counts = []
     run = 0
+    count_sum = 0
+    
     for i, c in enumerate(counts):
         if c == 0:
             if run > 0:
                 segments.append(run)
                 starts.append(i-run)
+                segmented_counts.append(count_sum)
+                
                 run = 0
+                count_sum = 0
         else:
             run += 1
+            count_sum += c
     
     segments = np.array(segments)
     starts = np.array(starts)
+    segmented_counts = np.array(segmented_counts)
 
-    h_start = starts[np.argmax(segments)]
-    h_length = np.max(segments)
+    h_start = starts[np.argmax(segmented_counts)]
+    h_length = segments[np.argmax(segmented_counts)]
 
     new_img = img[h_start-5:h_start+h_length+6]
 
     return new_img
 
 def get_plate_bounding_box(img):
-    _, _, stats, _ = bwlabel(img)
+    num_labels, labels, stats, centroids = bwlabel(img)
+
+    h_mean = np.average(centroids[:, 0])
+    v_mean = np.average(centroids[:, 1])
+    h_sd = np.std(centroids[:, 0])
+    v_sd = np.std(centroids[:, 1])
+
+    d = 3
+
+    filtered = [i for i in range(num_labels) if i == 0 or (abs(centroids[i][0]-h_mean) < d*h_sd and abs(centroids[i][1]-v_mean) < d*v_sd and stats[i, cv2.CC_STAT_HEIGHT] > stats[i, cv2.CC_STAT_WIDTH])]
+
+    for i in range(num_labels):
+        if i not in filtered:
+            img[labels == i] = 0
 
     left = max(min(stats[1:, cv2.CC_STAT_LEFT])-5, 0)
     right = min(max(stats[1:, cv2.CC_STAT_LEFT]+stats[1:, cv2.CC_STAT_WIDTH])+5, len(img[0]))
     top = max(min(stats[1:, cv2.CC_STAT_TOP])-5, 0)
     bottom = min(max(stats[1:, cv2.CC_STAT_TOP]+stats[1:, cv2.CC_STAT_HEIGHT])+5, len(img))
 
+    # left = max(min(stats[filtered[1:], cv2.CC_STAT_LEFT])-5, 0)
+    # right = min(max(stats[filtered[1:], cv2.CC_STAT_LEFT]+stats[filtered[1:], cv2.CC_STAT_WIDTH])+5, len(img[0]))
+    # top = max(min(stats[filtered[1:], cv2.CC_STAT_TOP])-5, 0)
+    # bottom = min(max(stats[filtered[1:], cv2.CC_STAT_TOP]+stats[filtered[1:], cv2.CC_STAT_HEIGHT])+5, len(img))
+
     img = img[top:bottom, left:right]
     
     return img
 
 def plate_to_numbers(img, templates):
-    num_labels, labels, stats, centroids = bwlabel(img)
+    num_labels, _, stats, _ = bwlabel(img)
     character_list = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
     text = []
 
-    for i in range(1, num_labels):
+    lefts = stats[:, cv2.CC_STAT_LEFT]
+    sorted_labels = [x for _, x in sorted(zip(lefts, list(range(num_labels))))]
+
+    for i in sorted_labels:
+        if i == 0:
+            pass
+        
         top = stats[i, cv2.CC_STAT_TOP]
         height = stats[i, cv2.CC_STAT_HEIGHT]
         left = stats[i, cv2.CC_STAT_LEFT]
@@ -213,6 +247,10 @@ def plate_to_numbers(img, templates):
             scaled_template = cv2.resize(template, (width, height))
 
             score = 0
+            penalty0 = 0
+            penalty1 = 0
+
+            # score = f1_score(target.flatten()//255, scaled_template.flatten()//255)
 
             for m in range(height):
                 for n in range(width):
@@ -220,9 +258,16 @@ def plate_to_numbers(img, templates):
                         if target[m][n] != 0:
                             score += 1
                         else:
-                            score -= 1
+                            penalty0 += 1
+                    else:
+                        if target[m][n] != 0:
+                            penalty1 += 1
 
-            scores[j] = score
+            scores[j] = score-penalty0*2-penalty1//2
+            # print(character_list[j], score, penalty0, penalty1)
+        
+        # cv2.imshow(str(i), target)
+        # print()
         
         best_score = np.max(scores)
         best_match = np.argmax(scores)
@@ -235,28 +280,26 @@ def plate_to_numbers(img, templates):
 # pipeline
 
 images = load_images("./../test")
-
-imuse = images[4]
-
-cv2.imshow('Sample', imuse)
-
-# otsu thresholding + BW area open
-bin_img = area_thresholding(imuse)
-
-# heuristic: check white frequency in each row
-rough_box = detect_plate_area(bin_img)
-
-# get bounding box from min/max of connected components
-filtered_box = get_plate_bounding_box(rough_box)
-
-cv2.imshow('Filtered box', filtered_box)
-
-# pattern recognition
 templates = load_characters()
 
-extracted_text = plate_to_numbers(filtered_box, templates)
+for label, img in images:
+    # cv2.imshow('Sample', imuse)
 
-print("".join(extracted_text))
+    # otsu thresholding + BW area open
+    bin_img = area_thresholding(img)
+
+    # heuristic: check white frequency in each row
+    rough_box = detect_plate_area(bin_img)
+
+    # get bounding box from min/max of connected components
+    filtered_box = get_plate_bounding_box(rough_box)
+
+    # cv2.imshow('Filtered box', filtered_box)
+
+    # pattern recognition
+    extracted_text = plate_to_numbers(filtered_box, templates)
+
+    print(label+":", "".join(extracted_text))
 
 # De-allocate any associated memory usage
 if cv2.waitKey(0) & 0xff == 27:

@@ -27,6 +27,17 @@ def load_images(directory):
     
     return images
 
+def load_image(filename):
+    w = 500
+    h = 300
+    
+    img = cv2.imread(filename)
+    # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img,(w, h))
+    # img = cv2.medianBlur(img,5)
+    
+    return img
+
 def run_length_encoding(arr, n):
     # starts with 0
 
@@ -277,13 +288,9 @@ def plate_to_numbers(img, templates):
 
     return text
 
-# pipeline
-
-images = load_images("./../test")
-templates = load_characters()
-
-for label, img in images:
-    # cv2.imshow('Sample', imuse)
+def read_license_plate(imgfile):
+    img = load_image(imgfile)
+    templates = load_characters()
 
     # otsu thresholding + BW area open
     bin_img = area_thresholding(img)
@@ -299,8 +306,4 @@ for label, img in images:
     # pattern recognition
     extracted_text = plate_to_numbers(filtered_box, templates)
 
-    print(label+":", "".join(extracted_text))
-
-# De-allocate any associated memory usage
-if cv2.waitKey(0) & 0xff == 27:
-    cv2.destroyAllWindows()
+    return "".join(extracted_text)

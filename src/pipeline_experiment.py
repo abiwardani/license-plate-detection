@@ -1,6 +1,7 @@
 import cv2
 import matplotlib.pyplot as plt
-from tqdm.notebook import tqdm
+import cv2
+import tensorflow as tf
 import os
 from glob import glob
 import numpy as np
@@ -15,7 +16,7 @@ def load_images(directory):
     w = 500
     h = 300
 
-    for filepath in tqdm(os.listdir(directory)):
+    for filepath in os.listdir(directory):
         if filepath[0] != ".":
             img_path = os.path.join(directory,filepath)
             img = cv2.imread(img_path)
@@ -79,7 +80,7 @@ def load_characters():
     directory = "../patterns"
     chars = []
 
-    for filepath in tqdm(os.listdir(directory)):
+    for filepath in os.listdir(directory):
         if filepath[0] != "." and "." in filepath:
             char_path = os.path.join(directory,filepath)
             char = cv2.imread(char_path)
@@ -277,6 +278,47 @@ def plate_to_numbers(img, templates):
 
     return text
 
+def change_dimension(img): 
+  new_img = np.zeros((28,28,3))
+  for i in range(3):
+    new_img[:,:,i] = img
+  return new_img
+
+# load model
+model = tf.keras.models.load_model('../models/cnn_model.h5')
+
+
+def predict(img):
+    num_labels, _, stats, _ = bwlabel(img)
+    # character_list = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    # text = []
+
+    lefts = stats[:, cv2.CC_STAT_LEFT]
+    sorted_labels = [x for _, x in sorted(zip(lefts, list(range(num_labels))))]
+
+    res = []
+    for i in sorted_labels:
+        if i == 0:
+            pass
+        
+        top = stats[i, cv2.CC_STAT_TOP]
+        height = stats[i, cv2.CC_STAT_HEIGHT]
+        left = stats[i, cv2.CC_STAT_LEFT]
+        width = stats[i, cv2.CC_STAT_WIDTH]
+        
+        img = img[top:top+height, left:left+width]
+        # print(img.shape)
+        img = cv2.resize(img, (28, 28), interpolation=cv2.INTER_AREA)
+        # print(img.shape)
+        # img = change_dimension(img)
+        # img = np.reshape(img, [28, 28, 3])
+        prediction = model.predict(tf.expand_dims(img, axis=0))
+        # predict_index = tf.argmax(prediction, axis=-1).numpy()[0]
+        # res.append(characters[predict_index]) 
+        
+    return ''.join(res)
+
 # pipeline
 
 images = load_images("./../test")
@@ -304,3 +346,19 @@ for label, img in images:
 # De-allocate any associated memory usage
 if cv2.waitKey(0) & 0xff == 27:
     cv2.destroyAllWindows()
+    
+# using cnn 
+img = cv2.imread('./Cars0.png')
+
+# otsu thresholding + BW area open
+bin_img = area_thresholding(img)
+
+# heuristic: check white frequency in each row
+rough_box = detect_plate_area(bin_img)
+
+# get bounding box from min/max of connected components
+filtered_box = get_plate_bounding_box(rough_box)
+# cv2.imshow('Filtered box', filtered_box)
+# plt.imshow(filtered_box)
+# plt.show()
+print(predict(filtered_box))
